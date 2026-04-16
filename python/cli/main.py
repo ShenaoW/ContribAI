@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -380,9 +381,6 @@ def awi_submit(ctx, findings, submitted_path, dry_run, auto_approve, repo_filter
       contribai-py awi-submit --repo owner/repo-name
       contribai-py awi-submit --auto-approve --limit 10
     """
-    import asyncio
-    from pathlib import Path as _Path
-
     from rich.panel import Panel
 
     from contribai.awi.runner import (
@@ -403,9 +401,9 @@ def awi_submit(ctx, findings, submitted_path, dry_run, auto_approve, repo_filter
         console.print("[red]❌ LLM API key not configured![/red]")
         sys.exit(1)
 
-    findings_path = _Path(findings) if findings else DEFAULT_FINDINGS
-    sub_path = _Path(submitted_path) if submitted_path else DEFAULT_SUBMITTED
-    cfg_path = _Path(ctx.obj["config_path"]) if ctx.obj["config_path"] else DEFAULT_CONFIG
+    findings_path = Path(findings) if findings else DEFAULT_FINDINGS
+    sub_path = Path(submitted_path) if submitted_path else DEFAULT_SUBMITTED
+    cfg_path = Path(ctx.obj["config_path"]) if ctx.obj["config_path"] else DEFAULT_CONFIG
 
     if not findings_path.exists():
         console.print(f"[red]Findings file not found: {findings_path}[/red]")

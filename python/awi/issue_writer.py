@@ -122,8 +122,8 @@ Your reports:
 - Do NOT include any boilerplate like "I hope this finds you well"
 - Do NOT claim proof-of-concept exploits were run against the repository
 
-Format your response as:
-TITLE: <concise issue title, max 80 chars>
+You MUST format your response exactly as follows (no other text before TITLE:):
+TITLE: <concise issue title, max 80 chars, no markdown>
 BODY:
 <full markdown issue body>
 """
@@ -317,34 +317,73 @@ vulnerability disclosure to help the maintainer improve their security posture.
 
     @staticmethod
     def _parse_response(raw: str, repo: str, findings: list[AWIFinding]) -> tuple[str, str] | None:
-        """Parse LLM response into (title, body) tuple."""
+        """Parse LLM response into (title, body) tuple.
+
+        Handles multiple formats the model may return:
+          TITLE: <title>\\nBODY:\\n<body>       (canonical)
+          Title: `<title>`\\n<body>             (markdown variant)
+          **Title**\\n<title>\\n<body>           (bold header variant)
+          # <title>\\n<body>                    (markdown heading)
+        """
         raw = raw.strip()
 
-        # Extract TITLE:
-        title_match = re.search(r"^TITLE:\s*(.+)$", raw, re.MULTILINE)
-        if not title_match:
-            # Try to extract first non-empty line as title
+        # 1. Canonical: "TITLE: ..." (case-insensitive)
+        title_match = re.search(r"^TITLE:\s*(.+)$", raw, re.MULTILINE | re.IGNORECASE)
+        if title_match:
+            title = title_match.group(1).strip().strip("`*").strip()
+            body_match = re.search(r"^BODY:\s*\n(.*)", raw, re.MULTILINE | re.DOTALL | re.IGNORECASE)
+            if body_match:
+                body = body_match.group(1).strip()
+            else:
+                body = raw[title_match.end():].strip()
+                if re.match(r"^BODY:", body, re.IGNORECASE):
+                    body = body.split("\n", 1)[1].strip() if "\n" in body else ""
+
+        # 2. "**Title**\n<actual title>\n<body>" — bold header then title on next line
+        elif re.search(r"^\*\*Title\*\*", raw, re.MULTILINE):
+            lines = [l for l in raw.splitlines() if l.strip()]
+            # Skip the "**Title**" line, use the next non-empty line as title
+            title_idx = next((i for i, l in enumerate(lines) if re.match(r"^\*\*Title\*\*", l)), 0)
+            if title_idx + 1 < len(lines):
+                title = lines[title_idx + 1].strip().strip("`*#").strip()
+                body = "\n".join(lines[title_idx + 2:]).strip()
+            else:
+                logger.error("Could not parse **Title** format for %s", repo)
+                return None
+
+        # 3. Markdown heading "# Title text"
+        elif re.search(r"^#{1,3}\s+\S", raw, re.MULTILINE):
+            heading_match = re.search(r"^#{1,3}\s+(.+)$", raw, re.MULTILINE)
+            title = heading_match.group(1).strip()
+            body = raw[heading_match.end():].strip()
+
+        # 4. "Issue Body\n<title>\n<body>" or "Issue Body\n..." patterns
+        elif re.search(r"^Issue Body\b", raw, re.MULTILINE):
+            # Title is the line right after "Issue Body"
+            parts = re.split(r"^Issue Body\s*\n", raw, maxsplit=1, flags=re.MULTILINE)
+            if len(parts) == 2:
+                rest_lines = [l for l in parts[1].splitlines() if l.strip()]
+                title = rest_lines[0].strip().strip("`*").strip() if rest_lines else ""
+                body = "\n".join(rest_lines[1:]).strip()
+            else:
+                title = ""
+                body = raw
+
+        # 5. Last resort: first non-empty line as title
+        else:
             lines = [l.strip() for l in raw.splitlines() if l.strip()]
             if lines:
-                title = lines[0].lstrip("#").strip()
+                title = lines[0].lstrip("#*`").strip()
                 body = "\n".join(lines[1:]).strip()
                 logger.warning("No TITLE: marker found for %s, using first line", repo)
             else:
                 logger.error("Could not parse LLM response for %s", repo)
                 return None
-        else:
-            title = title_match.group(1).strip()
 
-            # Extract BODY:
-            body_match = re.search(r"^BODY:\s*\n(.*)", raw, re.MULTILINE | re.DOTALL)
-            if body_match:
-                body = body_match.group(1).strip()
-            else:
-                # Everything after TITLE: line
-                title_end = title_match.end()
-                body = raw[title_end:].strip()
-                if body.startswith("BODY:"):
-                    body = body[5:].strip()
+        # Clean up title: strip markdown formatting and label prefixes
+        title = re.sub(r"^\*{1,2}|^\*{1,2}$", "", title).strip()   # bold markers
+        title = re.sub(r"^`|`$", "", title).strip()                  # backticks
+        title = re.sub(r"^(Title|TITLE):\s*", "", title).strip()     # leftover label
 
         # Validate
         if not title or not body:

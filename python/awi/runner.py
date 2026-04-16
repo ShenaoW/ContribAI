@@ -4,32 +4,26 @@ Reads findings_open.csv, groups by repository, generates LLM-based
 vulnerability disclosure issues, presents them for human review, and
 submits approved issues to GitHub.
 
-Usage::
-
-    python -m contribai.awi.runner \\
-        --findings /path/to/findings_open.csv \\
-        --config /path/to/config.yaml \\
-        [--dry-run] [--auto-approve] [--repo owner/repo] [--limit N]
+This module exposes ``run_awi_issue_submission()`` for use by the
+``contribai-py awi-submit`` CLI command defined in ``contribai.cli.main``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import csv
 import json
 import logging
-import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
-import click
+from rich.console import Console
 
 from contribai.awi.issue_writer import AWIFinding, AWIIssueWriter
-from contribai.awi.review_gate import IssueReviewDecision, IssueReviewer
+from contribai.awi.review_gate import IssueReviewer
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 DEFAULT_FINDINGS = Path("/home/shenaow/ActionInjection/outputs/argus-awi/findings_open.csv")
 DEFAULT_SUBMITTED = Path("/home/shenaow/ActionInjection/outputs/argus-awi/awi_issues_submitted.json")
@@ -61,7 +55,11 @@ def load_findings(findings_path: Path) -> dict[str, list[AWIFinding]]:
             )
             by_repo[finding.repo].append(finding)
 
-    logger.info("Loaded %d findings across %d repos", sum(len(v) for v in by_repo.values()), len(by_repo))
+    logger.info(
+        "Loaded %d findings across %d repos",
+        sum(len(v) for v in by_repo.values()),
+        len(by_repo),
+    )
     return dict(by_repo)
 
 
@@ -142,7 +140,10 @@ async def run_awi_issue_submission(
     limit: int | None = None,
     fetch_yaml: bool = True,
 ) -> None:
-    """Main async logic for AWI issue submission."""
+    """Main async logic for AWI issue submission.
+
+    Called by the ``contribai-py awi-submit`` command.
+    """
     # Load findings
     all_findings = load_findings(findings_path)
     submitted_log = load_submitted(submitted_path)
@@ -152,22 +153,22 @@ async def run_awi_issue_submission(
     if repo_filter:
         repos = [r for r in repos if r == repo_filter]
         if not repos:
-            click.echo(f"[error] No findings found for repo: {repo_filter}", err=True)
+            console.print(f"[red]No findings found for repo: {repo_filter}[/red]")
             return
 
     # Skip already submitted
     pending_repos = [r for r in repos if r not in submitted_log]
     if not pending_repos:
-        click.echo("All repos already have submitted issues. Nothing to do.")
+        console.print("[dim]All repos already have submitted issues. Nothing to do.[/dim]")
         return
 
     if limit:
         pending_repos = pending_repos[:limit]
 
-    click.echo(
-        f"Processing {len(pending_repos)} repos "
-        f"({len(repos) - len(pending_repos)} already submitted, "
-        f"{len(repos)} total)"
+    console.print(
+        f"Processing [bold]{len(pending_repos)}[/bold] repos "
+        f"([dim]{len(repos) - len(pending_repos)} already submitted, "
+        f"{len(repos)} total[/dim])"
     )
 
     # Build clients
@@ -185,7 +186,10 @@ async def run_awi_issue_submission(
     try:
         for i, repo in enumerate(pending_repos, 1):
             findings = all_findings[repo]
-            click.echo(f"\n[{i}/{len(pending_repos)}] {repo} — {len(findings)} finding(s)")
+            console.print(
+                f"\n[[bold cyan]{i}/{len(pending_repos)}[/bold cyan]] "
+                f"[bold]{repo}[/bold] — {len(findings)} finding(s)"
+            )
 
             # Optionally fetch workflow YAML for the first finding
             workflow_yaml = None
@@ -195,10 +199,10 @@ async def run_awi_issue_submission(
                 )
 
             # Generate issue via LLM
-            click.echo("  Generating issue via LLM...")
+            console.print("  [dim]Generating issue via LLM...[/dim]")
             result = await writer.generate(repo, findings, workflow_yaml=workflow_yaml)
             if result is None:
-                click.echo(f"  [error] LLM generation failed for {repo}", err=True)
+                console.print(f"  [red]LLM generation failed for {repo}[/red]")
                 errors += 1
                 continue
 
@@ -236,7 +240,7 @@ async def run_awi_issue_submission(
 
             # Submit
             if dry_run:
-                click.echo(f"  [dry-run] Would submit issue: {title!r}")
+                console.print(f"  [yellow][DRY RUN] Would submit: {title!r}[/yellow]")
                 submitted_log[repo] = {
                     "status": "dry_run",
                     "title": title,
@@ -248,7 +252,7 @@ async def run_awi_issue_submission(
 
             owner, name = repo.split("/", 1)
             try:
-                click.echo(f"  Submitting issue to {repo}...")
+                console.print(f"  [dim]Submitting issue to {repo}...[/dim]")
                 data = await github.create_issue(
                     owner, name, title=title, body=body, labels=["security"]
                 )
@@ -256,13 +260,13 @@ async def run_awi_issue_submission(
                 try:
                     data = await github.create_issue(owner, name, title=title, body=body)
                 except Exception as e:
-                    click.echo(f"  [error] Failed to submit issue: {e}", err=True)
+                    console.print(f"  [red]Failed to submit issue: {e}[/red]")
                     errors += 1
                     continue
 
             issue_number = data["number"]
             issue_url = data["html_url"]
-            click.echo(f"  Issue #{issue_number} created: {issue_url}")
+            console.print(f"  [green]Issue #{issue_number} created: {issue_url}[/green]")
 
             submitted_log[repo] = {
                 "status": "submitted",
@@ -280,117 +284,4 @@ async def run_awi_issue_submission(
         await llm.close()
         await github.close()
 
-    # Summary
-    click.echo("\n" + "=" * 60)
-    click.echo(f"Submitted: {approved}  Rejected: {rejected}  Skipped: {skipped}  Errors: {errors}")
-    click.echo(f"Submission log: {submitted_path}")
-
-
-# ── Click CLI ──────────────────────────────────────────────────────────────────
-
-
-@click.command("awi-submit")
-@click.option(
-    "--findings",
-    type=click.Path(exists=True, path_type=Path),
-    default=DEFAULT_FINDINGS,
-    show_default=True,
-    help="Path to findings_open.csv from ARGUS scan.",
-)
-@click.option(
-    "--config",
-    "config_path",
-    type=click.Path(exists=True, path_type=Path),
-    default=DEFAULT_CONFIG,
-    show_default=True,
-    help="Path to ContribAI config.yaml.",
-)
-@click.option(
-    "--submitted",
-    "submitted_path",
-    type=click.Path(path_type=Path),
-    default=DEFAULT_SUBMITTED,
-    show_default=True,
-    help="Path to submission log JSON (tracks already-submitted repos).",
-)
-@click.option("--dry-run", is_flag=True, help="Generate and review but do not actually submit.")
-@click.option(
-    "--auto-approve",
-    is_flag=True,
-    help="Skip human review and auto-approve all generated issues.",
-)
-@click.option(
-    "--repo",
-    "repo_filter",
-    default=None,
-    metavar="OWNER/REPO",
-    help="Process only this specific repo.",
-)
-@click.option(
-    "--limit",
-    type=int,
-    default=None,
-    metavar="N",
-    help="Process at most N repos.",
-)
-@click.option(
-    "--no-fetch-yaml",
-    "fetch_yaml",
-    is_flag=True,
-    default=True,
-    help="Skip fetching workflow YAML (faster but less context for LLM).",
-)
-@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging.")
-def cli(
-    findings: Path,
-    config_path: Path,
-    submitted_path: Path,
-    dry_run: bool,
-    auto_approve: bool,
-    repo_filter: Optional[str],
-    limit: Optional[int],
-    fetch_yaml: bool,
-    verbose: bool,
-) -> None:
-    """Submit AWI vulnerability disclosure issues to affected GitHub repositories.
-
-    Reads ARGUS scan results from findings_open.csv, generates professional
-    vulnerability reports using an LLM, presents each report for human review,
-    and submits approved reports as GitHub issues.
-
-    Examples:
-
-    \b
-    # Dry run — preview without submitting
-    python -m contribai.awi.runner --dry-run --limit 5
-
-    \b
-    # Interactive review, process one specific repo
-    python -m contribai.awi.runner --repo owner/repo-name
-
-    \b
-    # Auto-approve all, submit up to 10 issues
-    python -m contribai.awi.runner --auto-approve --limit 10
-    """
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
-    asyncio.run(
-        run_awi_issue_submission(
-            findings_path=findings,
-            config_path=config_path,
-            submitted_path=submitted_path,
-            dry_run=dry_run,
-            auto_approve=auto_approve,
-            repo_filter=repo_filter,
-            limit=limit,
-            fetch_yaml=fetch_yaml,
-        )
-    )
-
-
-if __name__ == "__main__":
-    cli()
+    return approved, rejected, skipped, errors

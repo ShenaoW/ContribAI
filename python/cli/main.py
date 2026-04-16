@@ -340,6 +340,120 @@ def patrol(ctx, dry_run, pr_number):
     asyncio.run(_patrol())
 
 
+@cli.command("awi-submit")
+@click.option(
+    "--findings",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to findings_open.csv from ARGUS scan.",
+)
+@click.option(
+    "--submitted",
+    "submitted_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to submission log JSON (prevents duplicate submissions).",
+)
+@click.option("--dry-run", is_flag=True, help="Generate and review issues without submitting.")
+@click.option("--auto-approve", is_flag=True, help="Skip human review, submit all approved issues.")
+@click.option(
+    "--repo",
+    "repo_filter",
+    default=None,
+    metavar="OWNER/REPO",
+    help="Process only this specific repository.",
+)
+@click.option("--limit", type=int, default=None, metavar="N", help="Process at most N repos.")
+@click.option("--no-fetch-yaml", "fetch_yaml", is_flag=True, default=True,
+              help="Skip fetching workflow YAML content (faster, less LLM context).")
+@click.pass_context
+def awi_submit(ctx, findings, submitted_path, dry_run, auto_approve, repo_filter, limit, fetch_yaml):
+    """Submit AWI vulnerability disclosure issues to affected GitHub repositories.
+
+    Reads ARGUS scan results (findings_open.csv), generates professional
+    responsible disclosure issues using an LLM, presents each issue for
+    human review, and submits approved issues to GitHub.
+
+    \b
+    Examples:
+      contribai-py awi-submit --dry-run --limit 5
+      contribai-py awi-submit --repo owner/repo-name
+      contribai-py awi-submit --auto-approve --limit 10
+    """
+    import asyncio
+    from pathlib import Path as _Path
+
+    from rich.panel import Panel
+
+    from contribai.awi.runner import (
+        DEFAULT_CONFIG,
+        DEFAULT_FINDINGS,
+        DEFAULT_SUBMITTED,
+        run_awi_issue_submission,
+    )
+
+    print_banner()
+    config = load_config(ctx.obj["config_path"])
+
+    if not config.github.token:
+        console.print("[red]❌ GitHub token not configured![/red]")
+        sys.exit(1)
+
+    if not config.llm.api_key and not config.llm.use_vertex:
+        console.print("[red]❌ LLM API key not configured![/red]")
+        sys.exit(1)
+
+    findings_path = _Path(findings) if findings else DEFAULT_FINDINGS
+    sub_path = _Path(submitted_path) if submitted_path else DEFAULT_SUBMITTED
+    cfg_path = _Path(ctx.obj["config_path"]) if ctx.obj["config_path"] else DEFAULT_CONFIG
+
+    if not findings_path.exists():
+        console.print(f"[red]Findings file not found: {findings_path}[/red]")
+        sys.exit(1)
+
+    mode = "[yellow]DRY RUN[/yellow]" if dry_run else "[green]LIVE[/green]"
+    console.print(f"\n🔐 AWI Issue Submission ({mode})")
+    console.print(f"   Findings: {findings_path}")
+    console.print(f"   Log: {sub_path}")
+    console.print(f"   LLM: {config.llm.provider} ({config.llm.model})")
+    if auto_approve:
+        console.print("   Review: [yellow]AUTO-APPROVE[/yellow]")
+    else:
+        console.print("   Review: [green]HUMAN (interactive)[/green]")
+    if repo_filter:
+        console.print(f"   Filter: {repo_filter}")
+    if limit:
+        console.print(f"   Limit: {limit} repos")
+    console.print()
+
+    result = asyncio.run(
+        run_awi_issue_submission(
+            findings_path=findings_path,
+            config_path=cfg_path,
+            submitted_path=sub_path,
+            dry_run=dry_run,
+            auto_approve=auto_approve,
+            repo_filter=repo_filter,
+            limit=limit,
+            fetch_yaml=fetch_yaml,
+        )
+    )
+
+    if result:
+        approved, rejected, skipped, errors = result
+        console.print()
+        console.print(
+            Panel(
+                f"✅ Submitted: [bold green]{approved}[/bold green]\n"
+                f"❌ Rejected: [bold red]{rejected}[/bold red]\n"
+                f"⏭️  Skipped: [bold yellow]{skipped}[/bold yellow]\n"
+                + (f"⚠️  Errors: [bold red]{errors}[/bold red]\n" if errors else "")
+                + f"\n📋 Log: {sub_path}",
+                title="AWI Issue Submission Complete" + (" (DRY RUN)" if dry_run else ""),
+            )
+        )
+
+
 @cli.command()
 @click.argument("url")
 @click.pass_context

@@ -210,12 +210,63 @@ class OpenAIProvider(LLMProvider):
                 temperature=temp,
                 max_tokens=max_tok,
             )
-            return response.choices[0].message.content or ""
+            content = response.choices[0].message.content
+            if content:
+                return content
+            # Some API proxies (e.g. packyapi) return null content in
+            # non-streaming mode — fall through to streaming fallback.
+            logger.debug("Non-streaming returned null content, retrying with streaming")
         except Exception as e:
             error_msg = str(e).lower()
             if "rate" in error_msg or "429" in error_msg:
                 raise LLMRateLimitError(f"OpenAI rate limit: {e}") from e
-            raise LLMError(f"OpenAI error: {e}") from e
+            # 400 errors from proxies that don't support certain params —
+            # fall through to streaming fallback
+            if "400" not in error_msg:
+                raise LLMError(f"OpenAI error: {e}") from e
+            logger.debug("Non-streaming got 400, retrying with raw streaming: %s", e)
+
+        # Streaming fallback: raw httpx (bypasses SDK parameter handling)
+        try:
+            import json as _json
+            import httpx as _httpx
+            chunks = []
+            base_url = str(self._client.base_url).rstrip("/")
+            api_key = self._client.api_key
+            async with _httpx.AsyncClient(timeout=120.0) as hx:
+                async with hx.stream(
+                    "POST",
+                    f"{base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": all_messages,
+                        "max_tokens": max_tok,
+                        "stream": True,
+                    },
+                ) as r:
+                    async for line in r.aiter_lines():
+                        if line.startswith("data:") and "[DONE]" not in line:
+                            try:
+                                chunk = _json.loads(line[5:])
+                                delta_content = (
+                                    chunk.get("choices", [{}])[0]
+                                    .get("delta", {})
+                                    .get("content")
+                                )
+                                if delta_content:
+                                    chunks.append(delta_content)
+                            except Exception:
+                                pass
+            return "".join(chunks)
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "rate" in error_msg or "429" in error_msg:
+                raise LLMRateLimitError(f"OpenAI rate limit: {e}") from e
+            raise LLMError(f"OpenAI streaming error: {e}") from e
 
     async def close(self):
         await self._client.close()

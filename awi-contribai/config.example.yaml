@@ -1,0 +1,24 @@
+github:
+  # Or set GITHUB_TOKEN in the environment.
+  token: ""
+  rate_limit_buffer: 100
+
+llm:
+  # Supported: openai, gemini, anthropic, ollama.
+  provider: "openai"
+  model: "gpt-5.4"
+  # Or set OPENAI_API_KEY / GEMINI_API_KEY / ANTHROPIC_API_KEY.
+  api_key: ""
+  base_url: null
+  temperature: 0.3
+  max_tokens: 8192
+  # Optional Vertex AI for provider=gemini.
+  vertex_project: ""
+  vertex_location: "global"
+
+storage:
+  db_path: "~/.awi-contribai/memory.db"
+
+contribution:
+  commit_convention: "conventional"
+  pr_description_style: "detailed"

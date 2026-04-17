@@ -1,369 +1,195 @@
-<div align="center">
+# AWI ContribAI
 
-# ContribAI
+Standalone AWI-focused ContribAI for responsible disclosure of **Agentic Workflow
+Injection (AWI)** vulnerabilities in GitHub Actions workflows.
 
-**Autonomous AI agent that discovers, analyzes, and submits<br>Pull Requests to open source projects on GitHub.**
+This project is intentionally split from the original ContribAI agent. It keeps only the AWI
+workflow:
 
-[![Rust](https://img.shields.io/badge/Rust-1.75+-f74c00?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/v6.2.0-blue?style=for-the-badge&logo=github&logoColor=white)](https://github.com/tang-vu/ContribAI/releases)
-[![License](https://img.shields.io/badge/AGPL--3.0-green?style=for-the-badge&logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Tests](https://img.shields.io/badge/602_tests-passing-brightgreen?style=for-the-badge&logo=checkmarx&logoColor=white)](#testing)
-[![PRs Merged](https://img.shields.io/badge/10_PRs-merged-blueviolet?style=for-the-badge&logo=git&logoColor=white)](HALL_OF_FAME.md)
+1. Read ARGUS `findings_open.csv`
+2. Generate a disclosure issue
+3. Human-review or auto-approve the issue
+4. Submit the issue to GitHub
+5. Generate a minimal workflow YAML fix
+6. Validate the patched YAML and residual taint
+7. Submit a linked PR
+8. Track issue/PR state locally in SQLite and JSON logs
 
-<br>
+## Install
 
-[**Getting Started**](#-getting-started) · [**Features**](#-features) · [**Commands**](#-commands) · [**Architecture**](#-architecture) · [**Hall of Fame**](HALL_OF_FAME.md)
-
-<br>
-
-```
-Set it up once. Wake up to merged PRs.
-```
-
-</div>
-
----
-
-## 🏆 Track Record
-
-<table>
-<tr>
-<td width="50%">
-
-| Metric | |
-|:-------|------:|
-| **PRs Submitted** | `44+` |
-| **PRs Merged** | `10` |
-| **Repos Contributed** | `21+` |
-| **Languages Analyzed** | `13` |
-
-</td>
-<td width="50%">
-
-**Notable Contributions:**
-
-🌍 `Worldmonitor` — 45k ⭐ · 3 merged<br>
-🕵️ `Maigret` — 19k ⭐ · 3 merged<br>
-🤖 `AI-Research-SKILLs` — 6k ⭐ · 1 merged<br>
-📊 `s-tui` — 5k ⭐ · 1 merged<br>
-🔍 `HolmesGPT` — 2k ⭐ · 1 merged
-
-</td>
-</tr>
-</table>
-
-> See the full **[Hall of Fame →](HALL_OF_FAME.md)** for every PR with links.
-
----
-
-## ⚡ How It Works
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Discovery  │────▶│  Analysis   │────▶│  Generator  │────▶│  PR + CI    │────▶│   Patrol    │
-│             │     │             │     │             │     │             │     │             │
-│ Search repos│     │ 13-lang AST │     │ LLM-powered │     │ Fork, commit│     │ Auto-fix    │
-│ by language │     │ 17 skills   │     │ code gen +  │     │ create PR   │     │ review      │
-│ and stars   │     │ security,   │     │ self-review │     │ sign CLA    │     │ feedback    │
-│             │     │ quality,    │     │ + scoring   │     │ monitor CI  │     │ & reply     │
-│             │     │ performance │     │             │     │             │     │             │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-```
-
----
-
-## 🚀 Getting Started
-
-### Install
+Use a virtual environment:
 
 ```bash
-# Build from source (recommended)
-git clone https://github.com/tang-vu/ContribAI.git && cd ContribAI
-cargo install --path crates/contribai-rs
-
-# Or one-line install
-curl -fsSL https://raw.githubusercontent.com/tang-vu/ContribAI/main/install.sh | bash
-# Windows:
-irm https://raw.githubusercontent.com/tang-vu/ContribAI/main/install.ps1 | iex
+cd awi-contribai
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[openai]'
 ```
 
-### Configure
+Choose the extra that matches your LLM provider:
 
 ```bash
-contribai init     # Interactive setup wizard
-contribai login    # Verify auth + switch LLM providers
+python -m pip install -e '.[openai]'
+python -m pip install -e '.[gemini]'
+python -m pip install -e '.[anthropic]'
+python -m pip install -e '.[all]'
 ```
 
-### Run
+Verify the CLI:
 
 ```bash
-contribai hunt                # Autonomous: discover → analyze → PR
-contribai target <repo_url>   # Target a specific repo
-contribai analyze <repo_url>  # Dry-run analysis (no PRs)
-contribai interactive         # Browse in ratatui TUI
+awi-contribai --help
 ```
 
-<details>
-<summary>📝 <strong>Example config.yaml</strong></summary>
+## Configure
+
+Copy the example config:
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+Edit `config.yaml`:
 
 ```yaml
 github:
-  token: "ghp_your_token"       # or set GITHUB_TOKEN env var
+  token: "ghp_xxx"
 
 llm:
-  provider: "gemini"            # gemini | openai | anthropic | ollama | vertex
-  model: "gemini-3-flash-preview"
-  api_key: "your_api_key"       # or set GEMINI_API_KEY env var
-  # base_url: "https://api.openai.com/v1"  # Optional: override default endpoint for OpenAI-compatible providers
+  provider: "openai"
+  model: "gpt-5.4"
+  api_key: "sk_xxx"
 
-discovery:
-  languages:                    # default: all 15 languages
-    - python
-    - javascript
-    - typescript
-    - go
-    - rust
-  stars_range: [100, 5000]
+storage:
+  db_path: "~/.awi-contribai/memory.db"
 ```
 
-See [`config.yaml.template`](config.yaml.template) for all options.
-
-</details>
-
----
-
-## ✨ Features
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### 🔍 Code Analysis
-- **13-language AST** via tree-sitter
-- Security: SQLi, XSS, resource leaks
-- Code quality, complexity, dead code
-- Performance bottlenecks
-- Documentation gaps
-- **17 progressive skills** loaded on-demand
-
-### 🤖 Multi-LLM Support
-- **Gemini 3.x** (default) — Flash, Pro, Lite tiers
-- OpenAI, Anthropic, Ollama, Vertex AI
-- Smart task routing across model tiers
-- 5 specialized sub-agents
-
-### 🎯 Hunt Mode
-- Multi-round autonomous hunting
-- Issue-first strategy
-- Cross-file fixes
-- Outcome learning per repo
-
-</td>
-<td width="50%" valign="top">
-
-### 👁 PR Patrol
-- Monitors PRs for review feedback
-- LLM-classifies maintainer comments
-- Auto-pushes code fixes
-- Auto-replies to questions
-- Auto-cleans stale PRs from memory
-
-### 🔌 Integrations
-- **MCP Server** — 21 tools for Claude Desktop
-- **Web Dashboard** — axum REST API at `:8787`
-- **Cron Scheduler** — automated runs
-- **Docker** — compose-ready deployment
-- **Webhooks** — Slack, Discord, Telegram
-
-### 🛡 Safety
-- AI policy detection
-- CLA auto-signing
-- Quality gate scoring
-- Duplicate PR prevention
-- Protected file guardrails
-
-</td>
-</tr>
-</table>
-
-### Supported Languages
-
-| Deep AST (tree-sitter) | Fallback Parser |
-|:----------------------:|:---------------:|
-| Python · JavaScript · TypeScript · Go · Rust · Java | Kotlin → Java |
-| C · C++ · Ruby · PHP · C# · HTML · CSS | Swift → Java · Vue/Svelte → HTML |
-
----
-
-## 📖 Commands
-
-ContribAI ships with **40+ commands** accessible via CLI or interactive menu.
-
-<details>
-<summary>🔥 <strong>Hunt & Contribute</strong></summary>
+You can also use environment variables:
 
 ```bash
-contribai hunt                        # Autonomous discovery + PRs
-contribai hunt --dry-run              # Analyze only, no PRs
-contribai run                         # Single pipeline run
-contribai target <url>                # Target specific repo
-contribai analyze <url>               # Dry-run analysis
-contribai solve <url>                 # Solve open issues
+export GITHUB_TOKEN="ghp_xxx"
+export OPENAI_API_KEY="sk_xxx"
 ```
 
-</details>
+## Prepare ARGUS Findings
 
-<details>
-<summary>📊 <strong>Monitor & Stats</strong></summary>
+Default input path:
+
+```text
+outputs/argus-awi/findings_open.csv
+```
+
+Required columns:
+
+```text
+repo,workflow,workflow_url,action,taint_source,source_location,sink_location,access_control
+```
+
+Example row:
+
+```csv
+repo,workflow,workflow_url,action,taint_source,source_location,sink_location,access_control
+owner/repo,.github/workflows/triage.yml,https://github.com/owner/repo/blob/main/.github/workflows/triage.yml,google-github-actions/run-gemini-cli,github.event.issue.body,issue.body,prompt,open
+```
+
+Use `--findings PATH` if the CSV lives elsewhere.
+
+## Recommended Usage
+
+### Dry-run one repo first
 
 ```bash
-contribai patrol                      # Respond to PR reviews
-contribai status                      # PR status table
-contribai stats                       # Contribution statistics
-contribai leaderboard                 # Merge rate by repo
-contribai system-status               # DB, rate limits, scheduler
+awi-contribai -c config.yaml disclose \
+  --findings outputs/argus-awi/findings_open.csv \
+  --repo owner/repo \
+  --dry-run
 ```
 
-</details>
+This generates and previews both the issue and PR patch without writing to GitHub.
 
-<details>
-<summary>🖥️ <strong>Interactive & Config</strong></summary>
+### Live full disclosure
 
 ```bash
-contribai                             # Interactive menu (22 items)
-contribai interactive                 # ratatui TUI browser
-contribai init                        # Setup wizard
-contribai login                       # Interactive auth + provider config
-contribai config-list                 # Show all config
-contribai config-get llm.provider     # Get config value
-contribai config-set llm.provider openai  # Set config value
-contribai profile security-focused    # Named profile
+awi-contribai -c config.yaml disclose --repo owner/repo
 ```
 
-</details>
+The interactive flow asks twice:
 
-<details>
-<summary>🌐 <strong>Servers & Tools</strong></summary>
+- approve/reject/skip the disclosure issue
+- approve/reject/skip the fix PR
+
+Choices:
+
+- `y`: submit
+- `n`: reject
+- `s`: skip
+
+### Batch safely
 
 ```bash
-contribai web-server                  # Dashboard at :8787
-contribai schedule                    # Cron scheduler
-contribai mcp-server                  # MCP stdio server
-contribai cleanup                     # Remove stale forks
-contribai notify-test                 # Test Slack/Discord/Telegram
+awi-contribai -c config.yaml disclose --limit 3 --dry-run
+awi-contribai -c config.yaml disclose --limit 3
 ```
 
-</details>
-
----
-
-## 🏗 Architecture
-
-```
-ContribAI/
-├── crates/contribai-rs/src/        ← Rust v6.2.0 (primary)
-│   ├── cli/                        40+ commands + ratatui TUI
-│   ├── core/                       Config, events, error types
-│   ├── github/                     REST v3 + GraphQL client
-│   ├── analysis/                   13-lang AST + 17 skills
-│   ├── generator/                  LLM code generation + scoring
-│   ├── orchestrator/               Pipeline + SQLite memory (72h TTL)
-│   ├── llm/                        Multi-provider + 5 sub-agents
-│   ├── pr/                         PR lifecycle + patrol + CI
-│   ├── mcp/                        21-tool MCP server (stdio)
-│   ├── web/                        axum dashboard + webhooks
-│   ├── sandbox/                    Docker + local fallback
-│   └── tools/                      Tool protocol interface
-│
-└── python/                         Legacy v4.1.0 (reference only)
-```
-
-<details>
-<summary>🔧 <strong>Tech Stack</strong></summary>
-
-| Layer | Technology |
-|:------|:-----------|
-| Language | **Rust 2021** (primary), Python 3.11+ (legacy) |
-| Async | Tokio (full), async/await throughout |
-| HTTP | reqwest 0.12 (async, rustls-tls) |
-| Database | SQLite (rusqlite, bundled) |
-| LLM | Gemini 3.x, OpenAI, Anthropic, Ollama, Vertex AI |
-| GitHub | REST API v3 + GraphQL |
-| AST | tree-sitter (13 languages) |
-| Web | axum 0.7 + tower-http |
-| TUI | ratatui + crossterm |
-| CLI | clap v4 + dialoguer + colored |
-| Tests | 602 tests (mockall, wiremock, tokio-test, criterion) |
-
-</details>
-
-See [`docs/system-architecture.md`](docs/system-architecture.md) for the full design.
-
----
-
-## 🧪 Testing
+Use `--auto-approve` only after validating output quality:
 
 ```bash
-cargo test                  # Run all 602 tests
-cargo test -- --nocapture   # With stdout output
-cargo test ast_intel        # AST module tests only
-cargo clippy                # Lint check
+awi-contribai -c config.yaml disclose --limit 3 --auto-approve
 ```
 
----
+## Separate Commands
 
-## 🔌 MCP Server
-
-Use ContribAI as a tool provider for **Claude Desktop** or **Antigravity IDE**:
-
-```json
-{
-  "mcpServers": {
-    "contribai": {
-      "command": "contribai",
-      "args": ["mcp-server"]
-    }
-  }
-}
-```
-
-> 21 tools available: repo analysis, PR management, GitHub search, issue solving, memory queries, and more.
-
----
-
-## 🐳 Docker
+Only create disclosure issues:
 
 ```bash
-docker compose up -d dashboard            # Dashboard at :8787
-docker compose run --rm runner run        # One-shot pipeline run
-docker compose up -d dashboard scheduler  # Dashboard + cron scheduler
+awi-contribai -c config.yaml submit --repo owner/repo
+awi-contribai -c config.yaml submit --repo owner/repo --no-fetch-yaml
 ```
 
----
+Only create fix PRs:
 
-## 📚 Documentation
+```bash
+awi-contribai -c config.yaml pr --repo owner/repo
+awi-contribai -c config.yaml pr --repo owner/repo --issue 42
+```
 
-| Document | Description |
-|:---------|:------------|
-| [**Hall of Fame**](HALL_OF_FAME.md) | 10 merged · 14 closed across 21+ repos |
-| [**AGENTS.md**](AGENTS.md) | AI agent guide — architecture, patterns, CLI reference |
-| [**Deployment Guide**](docs/deployment-guide.md) | Install, Docker, config, all 22 CLI commands |
-| [**System Architecture**](docs/system-architecture.md) | Pipeline, middleware, events, LLM routing |
-| [**Codebase Summary**](docs/codebase-summary.md) | Module map, tech stack, data structures |
-| [**Project Roadmap**](docs/project-roadmap.md) | Version history and future plans |
+Check status:
 
----
+```bash
+awi-contribai -c config.yaml status
+awi-contribai -c config.yaml status --no-refresh
+```
 
-## 📄 License
+## Useful Flags
 
-**AGPL-3.0 + Commons Clause** — see [LICENSE](LICENSE) for details.
+| Flag | Commands | Description |
+| --- | --- | --- |
+| `--findings PATH` | `disclose`, `submit`, `pr` | ARGUS findings CSV |
+| `--repo OWNER/REPO` | `disclose`, `submit`, `pr` | Process one repository |
+| `--limit N` | `disclose`, `submit`, `pr` | Process at most N repos |
+| `--dry-run` | `disclose`, `submit`, `pr` | Preview only; do not submit |
+| `--auto-approve` | `disclose`, `submit`, `pr` | Skip interactive review |
+| `--force` | `disclose`, `submit`, `pr` | Publicly submit even if SECURITY.md/PVR exists |
+| `--no-fetch-yaml` | `submit` | Do not include workflow YAML in issue prompt |
+| `--issue N` | `pr` | Add `Closes #N` to PR body |
+| `--no-refresh` | `status` | Read local SQLite state only |
 
----
+## Output Files
 
-<div align="center">
+| Path | Purpose |
+| --- | --- |
+| `outputs/argus-awi/awi_issues_submitted.json` | Issue deduplication and audit log |
+| `outputs/argus-awi/awi_prs_submitted.json` | PR deduplication and audit log |
+| `~/.awi-contribai/memory.db` | SQLite status DB |
+| `/tmp/awi_pr_debug/` | Full before/after YAML when `AWI_DEBUG=1` |
 
-**Built with Rust 🦀 and LLMs 🤖**
+Re-running skips repos already present in the relevant JSON log. Remove a repo entry from the log
+to retry it.
 
-[Releases](https://github.com/tang-vu/ContribAI/releases) · [Issues](https://github.com/tang-vu/ContribAI/issues) · [Hall of Fame](HALL_OF_FAME.md)
+## Safety Notes
 
-</div>
+- The tool checks for GitHub Private Vulnerability Reporting and `SECURITY.md` before public issue/PR submission.
+- Use `--force` only when you have confirmed public disclosure is appropriate.
+- Always run `--dry-run` before a live batch.
+- Review generated PoC, impact, and YAML patch before submitting security reports publicly.

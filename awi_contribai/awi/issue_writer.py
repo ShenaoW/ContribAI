@@ -351,23 +351,35 @@ does not know or care about the tool that found it.
         title = None
         body = None
 
-        # Step 1: find title marker. `**Title**` (bolded) can appear anywhere
-        # (may be glued to LLM preamble text). Bare `TITLE:` / `Title:` must be
-        # at line start so we don't false-match body prose.
-        title_marker = re.search(
-            r"(?:\*\*\s*Title\s*\*\*|^(?:TITLE|Title)\s*:)\s*",
+        def _find_marker(text: str, patterns: list[str]) -> re.Match[str] | None:
+            for pattern in patterns:
+                match = re.search(pattern, text, re.MULTILINE)
+                if match:
+                    return match
+            return None
+
+        # Step 1: find title marker. Models sometimes prepend meta text like:
+        # "I'll inspect the workflow... Title: ...". So we first prefer line-start
+        # markers, then fall back to marker detection anywhere in the text.
+        title_marker = _find_marker(
             raw,
-            re.MULTILINE,
+            [
+                r"(?:\*\*\s*Title\s*\*\*|^(?:TITLE|Title)\s*:)\s*",
+                r"(?:\*\*\s*Title\s*\*\*|\b(?:TITLE|Title)\s*:)\s*",
+            ],
         )
         if title_marker:
             after_title = raw[title_marker.end():]
 
             # Step 2: find body marker. `**Body**` anywhere, `BODY:`/`Body:`/
-            # standalone `Body` only at line start.
-            body_marker = re.search(
-                r"(?:\*\*\s*Body\s*\*\*|^(?:BODY|Body)\s*:?\s*$)\s*",
+            # standalone `Body` only at line start, with a fallback for markers
+            # glued to preamble text.
+            body_marker = _find_marker(
                 after_title,
-                re.MULTILINE,
+                [
+                    r"(?:\*\*\s*Body\s*\*\*|^(?:BODY|Body)\s*:?\s*$)\s*",
+                    r"(?:\*\*\s*Body\s*\*\*|\b(?:BODY|Body)\s*:)\s*",
+                ],
             )
             if body_marker:
                 title_block = after_title[: body_marker.start()]
@@ -378,7 +390,7 @@ does not know or care about the tool that found it.
                 body = ""
 
             # The title is the first non-empty line of title_block
-            title_lines = [l.strip() for l in title_block.splitlines() if l.strip()]
+            title_lines = [line.strip() for line in title_block.splitlines() if line.strip()]
             if title_lines:
                 title = title_lines[0].strip("`*#").strip()
                 # If no body marker found, body is everything else after the title line
@@ -409,6 +421,9 @@ does not know or care about the tool that found it.
         title = re.sub(r"^\*{1,2}|^\*{1,2}$", "", title).strip()   # bold markers
         title = re.sub(r"^`|`$", "", title).strip()                  # backticks
         title = re.sub(r"^(Title|TITLE):\s*", "", title).strip()     # leftover label
+        # If the model included a preamble on the same line before another
+        # embedded `Title:` marker, keep only the actual title portion.
+        title = re.sub(r"^.*?\b(?:Title|TITLE)\s*:\s*", "", title).strip()
 
         # Validate
         if not title or not body:

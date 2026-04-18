@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 
 import httpx
@@ -49,13 +50,73 @@ class OpenAIProvider(LLMProvider):
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=kwargs.get("temperature", self.temperature),
-            max_tokens=kwargs.get("max_tokens", self.max_tokens),
-        )
-        return response.choices[0].message.content or ""
+        request_kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+        }
+        temperature = kwargs.get("temperature", self.temperature)
+        if temperature is not None:
+            request_kwargs["temperature"] = temperature
+
+        try:
+            response = await self._client.chat.completions.create(**request_kwargs)
+        except Exception:
+            if not self.config.base_url:
+                raise
+            return await self._stream_complete(messages, request_kwargs["max_tokens"], temperature)
+
+        content = response.choices[0].message.content or ""
+        if content or not self.config.base_url:
+            return content
+        return await self._stream_complete(messages, request_kwargs["max_tokens"], temperature)
+
+    async def _stream_complete(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int | None,
+        temperature: float | None,
+    ) -> str:
+        base_url = (self.config.base_url or "").rstrip("/")
+        if not base_url:
+            return ""
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if temperature is not None and "packyapi.com" not in base_url:
+            payload["temperature"] = temperature
+
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}",
+            "Content-Type": "application/json",
+        }
+        parts: list[str] = []
+        async with httpx.AsyncClient(timeout=180) as client:
+            async with client.stream(
+                "POST",
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    for choice in chunk.get("choices", []):
+                        delta = choice.get("delta") or {}
+                        content = delta.get("content")
+                        if content:
+                            parts.append(content)
+        return "".join(parts)
 
     async def close(self):
         await self._client.close()

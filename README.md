@@ -80,6 +80,27 @@ Default input path:
 outputs/argus-awi/findings_open.csv
 ```
 
+This CSV is the **primary input** to the AWI workflow. The tool does **not**
+scan repositories by itself. You must provide a precomputed findings file
+before `disclose`, `submit`, or `pr` can do anything useful.
+
+### What You Need to Provide
+
+At minimum, another operator needs:
+
+1. this `awi` branch checkout
+2. a valid `config.yaml`
+3. a valid `findings_open.csv`
+
+The `findings_open.csv` tells the tool:
+
+- which repository to process (`repo`)
+- which workflow file to inspect (`workflow`)
+- which AI action is involved (`action`)
+- which attacker-controlled expression reached the prompt (`taint_source`)
+
+Without this file, the tool has no audit targets.
+
 Required columns:
 
 ```text
@@ -94,6 +115,31 @@ owner/repo,.github/workflows/triage.yml,https://github.com/owner/repo/blob/main/
 ```
 
 Use `--findings PATH` if the CSV lives elsewhere.
+
+### Important: Workflow YAML Is Fetched Live
+
+The workflow YAML is **not** read from a local clone of the target repository.
+This tool uses the `repo` and `workflow` columns from `findings_open.csv`, then
+fetches the current workflow file from GitHub at runtime.
+
+That means:
+
+- you do **not** need to provide local copies of target repositories
+- you **do** need a correct `repo` and `workflow` path in the CSV
+- the GitHub token used at runtime must be able to read the target repository
+- if the remote workflow has changed since the findings were generated, the
+  generated issue/PR will use the current remote YAML, not an old local copy
+
+### Suggested Handoff Package
+
+If you want someone else to run this workflow for you, share:
+
+- the `awi` branch code
+- `config.example.yaml` or a redacted `config.yaml`
+- the actual `findings_open.csv`
+- the exact command you expect them to run
+
+Do **not** assume the tool can reconstruct findings from GitHub alone.
 
 ## Recommended Usage
 
